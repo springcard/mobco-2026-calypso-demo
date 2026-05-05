@@ -2,8 +2,19 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import fnmatch
 
-from smartcard.scard import *
+try:
+    from smartcard.scard import *
+except ModuleNotFoundError as exc:
+    if exc.name != "smartcard":
+        raise
+    raise ModuleNotFoundError(
+        "Missing Python module 'smartcard' from the pyscard package. "
+        "On Raspberry Pi OS/Debian, install it with "
+        "'sudo apt install python3-pyscard', or create a virtual "
+        "environment and run 'python -m pip install -r requirements.txt'."
+    ) from exc
 
 CARD_STATUS_CHANGE_TIMEOUT_MS = 1000
 
@@ -52,19 +63,52 @@ def print_readers(readers) -> None:
             print("\t" + reader)
 
 
+def _is_wildcard_pattern(pattern):
+    return any(char in pattern for char in "*?[")
+
+
+def _matches_reader_pattern(reader, pattern):
+    return fnmatch.fnmatchcase(reader.casefold(), pattern.casefold())
+
+
+def _is_contactless_reader(reader):
+    reader_lower = reader.lower()
+    return (" contactless " in reader_lower) or (" nfc " in reader_lower)
+
+
+def _select_reader_from_pattern(readers, pattern):
+    matches = [reader for reader in readers if _matches_reader_pattern(reader, pattern)]
+    if len(matches) < 1:
+        raise Exception("Reader not found: " + pattern)
+    if len(matches) == 1:
+        return matches[0]
+
+    contactless_matches = [reader for reader in matches if _is_contactless_reader(reader)]
+    if len(contactless_matches) == 1:
+        return contactless_matches[0]
+
+    raise Exception(
+        "Reader pattern is ambiguous: "
+        + pattern
+        + "\nMatching readers:\n\t"
+        + "\n\t".join(matches)
+    )
+
+
 def select_reader(readers, requested_reader=None):
     if len(readers) < 1:
         raise Exception("No smart card readers")
 
     if requested_reader is not None:
-        if requested_reader not in readers:
-            raise Exception("Reader not found: " + requested_reader)
-        return requested_reader
+        if requested_reader in readers:
+            return requested_reader
+        if _is_wildcard_pattern(requested_reader):
+            return _select_reader_from_pattern(readers, requested_reader)
+        raise Exception("Reader not found: " + requested_reader)
 
     for reader in readers:
-        reader_lower = reader.lower()
-        if "springcard" in reader_lower:
-            if (" contactless " in reader_lower) or (" nfc " in reader_lower):
+        if "springcard" in reader.lower():
+            if _is_contactless_reader(reader):
                 return reader
 
     raise Exception("SpringCard contactless reader not found")

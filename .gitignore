@@ -57,3 +57,5 @@ dkms.conf
 # Python
 __pycache__/
 *.py[cod]
+.venv/
+venv/

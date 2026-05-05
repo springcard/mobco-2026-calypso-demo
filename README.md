@@ -37,6 +37,47 @@ If you are interested in a real-world deployment, use this repository only as a 
 - `LICENSE.txt`: legal license attached to the published source code.
 - `.gitignore`: local build and Python cache exclusions.
 
+## Running The Calypso PKI Demo On Raspberry Pi OS
+
+Raspberry Pi OS Bookworm and later mark the system Python environment as externally
+managed, so do not install the demo dependencies with a global `pip install`.
+
+Preferred setup with Debian/Raspberry Pi OS packages:
+
+```sh
+sudo apt update
+sudo apt install pcscd pcsc-tools python3-pyscard python3-cryptography
+sudo systemctl enable --now pcscd
+cd ~/mobco-2026-calypso-demo/calypso-pki
+python3 mobco-calypso-pki.py -l
+python3 mobco-calypso-pki.py
+```
+
+To select a specific reader, pass its PC/SC name with `-r`. The value also
+accepts shell-style wildcards, which is useful when the final slot or serial
+part changes between machines:
+
+```sh
+python3 mobco-calypso-pki.py -r "SpringCard *"
+python3 mobco-calypso-pki.py -r "SpringCard Puck * 00 00"
+python3 mobco-calypso-pki.py -r "STid *"
+```
+
+Alternative setup with a virtual environment, useful if the Python packages are
+not available from `apt` on the target image:
+
+```sh
+sudo apt update
+sudo apt install pcscd pcsc-tools python3-venv python3-dev libpcsclite-dev swig
+sudo systemctl enable --now pcscd
+cd ~/mobco-2026-calypso-demo/calypso-pki
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python mobco-calypso-pki.py -l
+python mobco-calypso-pki.py
+```
+
 ## Related Organizations
 
 - [Calypso Networks Association](https://calypsonet.org/) brings the transport, mobility and services community together around open contactless ticketing standards.

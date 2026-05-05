@@ -3,18 +3,28 @@
 from contextlib import contextmanager
 import sys
 
-from smartcard.scard import (
-    SCARD_LEAVE_CARD,
-    SCARD_PROTOCOL_T0,
-    SCARD_PROTOCOL_T1,
-    SCARD_S_SUCCESS,
-    SCARD_SHARE_DIRECT,
-    SCARD_CTL_CODE,
-    SCardConnect,
-    SCardControl,
-    SCardDisconnect,
-    SCardGetErrorMessage,
-)
+try:
+    from smartcard.scard import (
+        SCARD_LEAVE_CARD,
+        SCARD_PROTOCOL_T0,
+        SCARD_PROTOCOL_T1,
+        SCARD_S_SUCCESS,
+        SCARD_SHARE_DIRECT,
+        SCARD_CTL_CODE,
+        SCardConnect,
+        SCardControl,
+        SCardDisconnect,
+        SCardGetErrorMessage,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "smartcard":
+        raise
+    raise ModuleNotFoundError(
+        "Missing Python module 'smartcard' from the pyscard package. "
+        "On Raspberry Pi OS/Debian, install it with "
+        "'sudo apt install python3-pyscard', or create a virtual "
+        "environment and run 'python -m pip install -r requirements.txt'."
+    ) from exc
 
 
 SCARD_PROTOCOL_UNDEFINED = 0

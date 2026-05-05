@@ -15,17 +15,21 @@ License: MIT License (see LICENSE file for details)
 Copyright (c) 2025 SpringCard SAS, France
 
 Dependencies:
-    - Python 3.13+
-    - pyscard module (pip install pyscard)
-    - cryptography module (pip install cryptography)
+    - Python 3
+    - pyscard module, provided by the Debian/Raspberry Pi OS python3-pyscard package
+      or installed in a virtual environment with pip
+    - cryptography module, provided by the Debian/Raspberry Pi OS python3-cryptography
+      package or installed in a virtual environment with pip
 
 Usage:
     Place a compliant Calypso Prime card on a SpringCard NFC/RFID HF PC/SC Coupler and run
         python calypso-pki-example.py
     List the available PC/SC readers and exit:
         python calypso-pki-example.py -l
-    Use a specific PC/SC reader:
+    Use a specific PC/SC reader, optionally with shell-style wildcards:
         python calypso-pki-example.py -r "ReaderName"
+        python calypso-pki-example.py -r "SpringCard *"
+        python calypso-pki-example.py -r "STid *"
     Use a text file containing accepted CardSerialNumber values:
         python calypso-pki-example.py -f accepted-cards.txt
     Accept every genuine card, ignoring the accepted CardSerialNumber list:
@@ -53,7 +57,7 @@ def parse_command_line(argv=None):
         "-r",
         "--reader",
         metavar="ReaderName",
-        help="use this PC/SC reader instead of auto-detecting a SpringCard contactless reader",
+        help="use this PC/SC reader instead of auto-detecting a SpringCard contactless reader; accepts wildcards like 'SpringCard *'",
     )
     parser.add_argument(
         "-f",
@@ -97,9 +101,9 @@ def _pause_on_windows_when_launched_without_args(argv):
 
 
 def list_pcsc_readers() -> int:
-    import pcsc_channel
-
     try:
+        import pcsc_channel
+
         with pcsc_channel.pcsc_context(verbose=False) as hcontext:
             readers = pcsc_channel.list_readers(hcontext)
             pcsc_channel.print_readers(readers)
@@ -110,11 +114,11 @@ def list_pcsc_readers() -> int:
 
 
 def run_example(args) -> int:
-    import access_control
-    import pcsc_channel
-    import pcsc_output
-
     try:
+        import access_control
+        import pcsc_channel
+        import pcsc_output
+
         with pcsc_channel.pcsc_context(verbose=True) as hcontext:
             readers = pcsc_channel.list_readers(hcontext)
             pcsc_channel.print_readers(readers)
