@@ -157,7 +157,7 @@ class pcsc_output_springcard(_pcsc_output_base):
             print("SCardControl response:", response.hex(" "))
 
     def OnCardUnsupported(self):
-        self.play_sequence(SPRINGCARD_SEQUENCE_READ_FAILED
+        self.play_sequence(SPRINGCARD_SEQUENCE_READ_FAILED)
 
     def OnCardNotGenuine(self):
         self.play_sequence(SPRINGCARD_SEQUENCE_READ_FAILED)
