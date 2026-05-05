@@ -45,7 +45,6 @@ BEEP_200_MS = 2
 BEEP_1_SECOND = 10
 
 SPRINGCARD_SEQUENCE_READ_FAILED = 0x24
-SPRINGCARD_SEQUENCE_READ_AGAIN = 0x25
 SPRINGCARD_SEQUENCE_ACCESS_GRANTED = 0x60
 SPRINGCARD_SEQUENCE_ACCESS_DENIED = 0x61
 
@@ -158,7 +157,7 @@ class pcsc_output_springcard(_pcsc_output_base):
             print("SCardControl response:", response.hex(" "))
 
     def OnCardUnsupported(self):
-        self.play_sequence(SPRINGCARD_SEQUENCE_READ_AGAIN)
+        self.play_sequence(SPRINGCARD_SEQUENCE_READ_FAILED
 
     def OnCardNotGenuine(self):
         self.play_sequence(SPRINGCARD_SEQUENCE_READ_FAILED)

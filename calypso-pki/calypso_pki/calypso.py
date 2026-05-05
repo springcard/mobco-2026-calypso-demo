@@ -50,6 +50,11 @@ def _card_not_genuine(callbacks, message: str):
     raise CardNotGenuineError(message)
 
 
+def _card_unsupported(callbacks, message: str):
+    _call_callback(callbacks, "OnCardUnsupported")
+    raise CardUnsupportedError(message)
+
+
 """
 Quick'n'dirty ASN.1 DER parser
 """  
@@ -411,9 +416,9 @@ def verify_cacert(cacert, rootpub: bytes, silent: bool):
     return True, N
 
 
-def _require_success(sw: int, message: str) -> None:
+def _require_success(sw: int, message: str, callbacks: CalypsoPkiCallbacks | None = None) -> None:
     if sw != 0x9000:
-        raise Exception(message)
+        _card_unsupported(callbacks, message)
 
 
 def _build_session_input(command1, response1, command2, response2, command3, response3):
@@ -441,42 +446,41 @@ def read_calypso_pki_transaction(
 
         _application_fci, sw = channel.transmit(CALYPSO_SELECT_APPLICATION, "SelectApplication")
         if sw != 0x9000:
-            _call_callback(callbacks, "OnCardUnsupported")
-            raise CardUnsupportedError("SelectApplication failed")
+            _card_unsupported(callbacks, "SelectApplication failed")
 
         challenge = list(os.urandom(8))
         command1 = CALYPSO_OPEN_SESSION_AND_READ_ENV_HEADER + challenge + CALYPSO_OPEN_SESSION_AND_READ_ENV_TRAILER
         response1, sw = channel.transmit(command1, "OpenSession(Challenge) and Read Environment")
-        _require_success(sw, "ECDSASign failed")
+        _require_success(sw, "ECDSASign failed", callbacks)
 
         command2 = CALYPSO_READ_CTC_LIST
         response2, sw = channel.transmit(command2, "Read CTC List")
-        _require_success(sw, "Read CTC failed")
+        _require_success(sw, "Read CTC failed", callbacks)
 
         command3 = CALYPSO_READ_CONTRACT
         response3, sw = channel.transmit(command3, "Read Contract")
-        _require_success(sw, "Read Contract failed")
+        _require_success(sw, "Read Contract failed", callbacks)
 
         signature, sw = channel.transmit(CALYPSO_CLOSE_SESSION, "CloseSession")
-        _require_success(sw, "CloseSession failed")
+        _require_success(sw, "CloseSession failed", callbacks)
 
         input_data = _build_session_input(command1, response1, command2, response2, command3, response3)
 
         card_public_key, sw = channel.transmit(CALYPSO_GET_CARDPUB, "GetData#CardPub")
-        _require_success(sw, "Failed to get CardPub")
+        _require_success(sw, "Failed to get CardPub", callbacks)
 
         ca_certificate_1, sw = channel.transmit(CALYPSO_GET_CACERT_1, "GetData#CACert#1")
-        _require_success(sw, "Failed to get CACert (#1)")
+        _require_success(sw, "Failed to get CACert (#1)", callbacks)
 
         ca_certificate_2, sw = channel.transmit(CALYPSO_GET_CACERT_2, "GetData#CACert#2")
-        _require_success(sw, "Failed to get CACert (#2)")
+        _require_success(sw, "Failed to get CACert (#2)", callbacks)
         ca_certificate = ca_certificate_1 + ca_certificate_2
 
         card_certificate_1, sw = channel.transmit(CALYPSO_GET_CARDCERT_1, "GetData#CardCert#1")
-        _require_success(sw, "Failed to get CardCert (#1)")
+        _require_success(sw, "Failed to get CardCert (#1)", callbacks)
 
         card_certificate_2, sw = channel.transmit(CALYPSO_GET_CARDCERT_2, "GetData#CardCert#2")
-        _require_success(sw, "Failed to get CardCert (#2)")
+        _require_success(sw, "Failed to get CardCert (#2)", callbacks)
         card_certificate = card_certificate_1 + card_certificate_2
 
         return CalypsoPkiTransaction(
