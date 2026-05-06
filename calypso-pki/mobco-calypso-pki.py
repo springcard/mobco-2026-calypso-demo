@@ -36,11 +36,38 @@ Usage:
         python calypso-pki-example.py -y
     Run an external script when a card is accepted:
         python calypso-pki-example.py -o open-gpio.sh
+    Disable all output except fatal errors:
+        python calypso-pki-example.py -q
 
 """
 
 import argparse
+import contextlib
+import io
 import sys
+
+
+_quiet = False
+
+
+def _print(*args, fatal=False, **kwargs):
+    if _quiet and not fatal:
+        return
+
+    if fatal and "file" not in kwargs:
+        kwargs["file"] = sys.stderr
+
+    print(*args, **kwargs)
+
+
+@contextlib.contextmanager
+def _quiet_stdout():
+    if not _quiet:
+        yield
+        return
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        yield
 
 
 def parse_command_line(argv=None):
@@ -80,23 +107,29 @@ def parse_command_line(argv=None):
         metavar="ScriptName",
         help="run this .sh or .bat script when a card is accepted",
     )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="disable all output except fatal errors",
+    )
     return parser.parse_args(argv)
 
 
 def _print_stats(stats, card_communication_time, crypto_time):
-    print("Bytes exchanged")
-    print(f"\tPC to Card: {stats.command_bytes}")
-    print(f"\tCard to PC: {stats.response_bytes}")
-    print(f"\tTotal: {stats.command_bytes + stats.response_bytes}")
-    print(f"Number of APDU: {stats.apdus_count}")
-    print("Time elapsed")
-    print(f"\tCard communication: {card_communication_time}")
-    print(f"\tPostponed Cryptography: {crypto_time}")
+    _print("Bytes exchanged")
+    _print(f"\tPC to Card: {stats.command_bytes}")
+    _print(f"\tCard to PC: {stats.response_bytes}")
+    _print(f"\tTotal: {stats.command_bytes + stats.response_bytes}")
+    _print(f"Number of APDU: {stats.apdus_count}")
+    _print("Time elapsed")
+    _print(f"\tCard communication: {card_communication_time}")
+    _print(f"\tPostponed Cryptography: {crypto_time}")
 
 
 def _pause_on_windows_when_launched_without_args(argv):
     if (argv is None) and ("win32" == sys.platform) and (len(sys.argv) == 1):
-        print("Press Enter to continue")
+        _print("Press Enter to continue")
         sys.stdin.read(1)
 
 
@@ -109,7 +142,7 @@ def list_pcsc_readers() -> int:
             pcsc_channel.print_readers(readers)
         return 0
     except Exception as e:
-        print("Exception:", e)
+        _print("Exception:", e, fatal=True)
         return 1
 
 
@@ -119,12 +152,12 @@ def run_example(args) -> int:
         import pcsc_channel
         import pcsc_output
 
-        with pcsc_channel.pcsc_context(verbose=True) as hcontext:
+        with pcsc_channel.pcsc_context(verbose=not args.quiet) as hcontext:
             readers = pcsc_channel.list_readers(hcontext)
             pcsc_channel.print_readers(readers)
 
             reader = pcsc_channel.select_reader(readers, args.reader)
-            print("Using reader: " + reader)
+            _print("Using reader: " + reader)
 
             from calypso_pki import calypso
 
@@ -149,50 +182,67 @@ def run_example(args) -> int:
                 crypto_time = 0.0
 
                 try:
-                    with pcsc_channel.connect_channel(hcontext, reader, stats=stats, benchmark=False) as channel:
-                        output = pcsc_output.PcscOutput(hcontext, reader, before_control=channel.disconnect)
+                    with pcsc_channel.connect_channel(
+                        hcontext,
+                        reader,
+                        stats=stats,
+                        benchmark=args.quiet,
+                    ) as channel:
+                        output = pcsc_output.PcscOutput(
+                            hcontext,
+                            reader,
+                            before_control=channel.disconnect,
+                        )
                         callbacks = access_control.Configure(
                             args.authorized_cards_file,
                             output=output,
                             accept_all_cards=args.accept_all_cards,
                             open_script=args.open_script,
                         )
-                        transaction = calypso.read_calypso_pki_transaction(channel, callbacks=callbacks, benchmark=False)
+                        transaction = calypso.read_calypso_pki_transaction(
+                            channel,
+                            callbacks=callbacks,
+                            benchmark=args.quiet,
+                        )
                         card_communication_time = transaction.communication_time
-                    print()
+                    _print()
                 except Exception as e:
-                    print("Exception:", e)
+                    _print("Exception:", e)
 
                 try:
                     if transaction is not None:
                         crypto_time = calypso.verify_calypso_pki_transaction(
                             transaction,
                             callbacks=callbacks,
-                            benchmark=False,
+                            benchmark=args.quiet,
                         )
                 except Exception as e:
-                    print("Exception:", e)
+                    _print("Exception:", e)
 
                 _print_stats(stats, card_communication_time, crypto_time)
                 pcsc_channel.wait_for_card_removal(hcontext, reader)
 
         return 0
     except KeyboardInterrupt:
-        print()
-        print("Interrupted.")
+        _print()
+        _print("Interrupted.")
         return 0
     except Exception as e:
-        print("Exception:", e)
+        _print("Exception:", e, fatal=True)
         return 1
 
 
 def main(argv=None) -> int:
+    global _quiet
+
     args = parse_command_line(argv)
+    _quiet = args.quiet
 
     try:
-        if args.list_readers:
-            return list_pcsc_readers()
-        return run_example(args)
+        with _quiet_stdout():
+            if args.list_readers:
+                return list_pcsc_readers()
+            return run_example(args)
     finally:
         _pause_on_windows_when_launched_without_args(argv)
 
