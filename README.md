@@ -36,6 +36,7 @@ If you are interested in a real-world deployment, use this repository only as a 
 - `calypso-pki/`: Python proof-of-concept code used by the demonstrator.
 - `LICENSE.txt`: legal license attached to the published source code.
 - `.gitignore`: local build and Python cache exclusions.
+- `SETUP.md`: a few notes on how to configure the target. NOT AND EXHAUSTIVE HOWTO!
 
 ## Running The Calypso PKI Demo On Raspberry Pi OS
 
