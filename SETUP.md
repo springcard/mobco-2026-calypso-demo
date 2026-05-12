@@ -419,13 +419,122 @@ On our demo board we have
 
 e.g.:
 
-- #1 = GPIO17
-- #2 = GPIO18
-- #3 = GPIO27
-- #4 = GPIO22
+- Relay #1 = GPIO 19
+- Relay #2 = GPIO 26
+- Relay #3 = GPIO 20
+- Relay #4 = GPIO 21
 
 Relays are active low:
 
 - 0 = ACTIVE
 - 1 = NOT ACTIVE
 
+## Auto-start at system boot
+
+To run the `start.sh` script automatically on boot **after TCP/IP is ready on Eth0** (required for SpringPark reader), create a systemd service.
+
+### 1. Create the service file
+
+```
+sudo vim /etc/systemd/system/mobco-calypso-pki.service
+```
+
+Add the following content:
+
+```ini
+[Unit]
+Description=MobCo Calypso PKI Service
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/sys/class/net/eth0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=~springcard/mobco-2026-calypso-demo/scripts
+ExecStart=/bin/bash ~springcard/mobco-2026-calypso-demo/scripts/start.sh
+ExecStop=/bin/bash ~springcard/mobco-2026-calypso-demo/scripts/stop.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `~springcard/mobco-2026-calypso-demo/scripts` with the actual path to your scripts folder if required.
+
+### 2. Allow non-root users to manage the service
+
+To allow a regular user to run `sudo systemctl stop/restart mobco-calypso-pki`, create a sudoers rule:
+
+```
+sudo visudo -f /etc/sudoers.d/mobco-calypso-pki
+```
+
+Add the following lines:
+
+```
+springcard ALL=(root) NOPASSWD: /bin/systemctl start mobco-calypso-pki.service
+springcard ALL=(root) NOPASSWD: /bin/systemctl stop mobco-calypso-pki.service
+springcard ALL=(root) NOPASSWD: /bin/systemctl restart mobco-calypso-pki.service
+springcard ALL=(root) NOPASSWD: /bin/systemctl status mobco-calypso-pki.service
+```
+
+Replace `springcard` with your username.
+
+### 3. Enable and start the service
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable mobco-calypso-pki.service
+sudo systemctl start mobco-calypso-pki.service
+```
+
+### 4. Verify the service is running
+
+```
+sudo systemctl status mobco-calypso-pki.service
+journalctl -u mobco-calypso-pki.service -n 20
+```
+
+### 5. Optional: Enable the watchdog
+
+To also start the watchdog on boot, create `/etc/systemd/system/mobco-calypso-pki-watchdog.service`:
+
+```
+sudo vim /etc/systemd/system/mobco-calypso-pki-watchdog.service
+```
+
+Add:
+
+```ini
+[Unit]
+Description=MobCo Calypso PKI Watchdog
+After=mobco-calypso-pki.service
+Wants=mobco-calypso-pki.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=~springcard/mobco-2026-calypso-demo/scripts
+ExecStart=/bin/bash ~springcard/mobco-2026-calypso-demo/scripts/watchdog.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable it:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable mobco-calypso-pki-watchdog.service
+sudo systemctl start mobco-calypso-pki-watchdog.service
+```
+
+Check the watchdog logs:
+
+```
+tail -f /tmp/watchdog.log
+```
