@@ -1,5 +1,9 @@
 #!/bin/bash
-cd "$(dirname "$0")"
-pkill -f "mobco-calypso-pki.py" || true
-sleep 1
-service pcscd stop
+PIDDIR=home/springcard/mobco-2026-calypso-demo/pid
+for f in "$PIDDIR"/*.pid; do
+    [ -f "$f" ] || continue
+    PID=$(cat "$f")
+    echo "Stopping PID $PID from $f"
+    kill "$PID" 2>/dev/null
+    rm -f "$f"
+done
