@@ -510,443 +510,140 @@ ps -ef | grep mobco-calypso-pki.py
 
 If you used root crontab, the script will run as root and behave like a login shell launching the demo.
 
-## Read-only Filesystem for Power Safety
+## Read-only microSD for power safety
 
-Running the filesystem in read-only (ro) mode protects against data corruption from sudden power loss. This is essential for unattended embedded systems.
+The goal is simple: keep the whole microSD card read-only during normal operation, without overlayfs and without persistent logs. Runtime files and logs stay writable only in RAM, so the system and the demo can still run normally.
 
-### 1. Mount the root filesystem as read-only
+### 1. Prepare volatile writable directories
 
-Edit the kernel boot parameters. On Raspberry Pi:
+Make sure `/tmp`, `/var/tmp`, and `/var/log` are RAM-backed. This avoids boot or service failures caused by software trying to write temporary files or logs while the microSD is read-only.
 
+Edit `/etc/fstab`:
+
+```sh
+sudo vim /etc/fstab
 ```
+
+Add these lines:
+
+```fstab
+tmpfs /tmp     tmpfs defaults,noatime,nosuid,nodev,mode=1777,size=256M 0 0
+tmpfs /var/tmp tmpfs defaults,noatime,nosuid,nodev,mode=1777,size=128M 0 0
+tmpfs /var/log tmpfs defaults,noatime,nosuid,nodev,mode=0755,size=128M 0 0
+```
+
+This is not persistent logging: logs disappear at reboot. It only keeps services from failing because `/var/log` is not writable.
+
+Configure systemd-journald for volatile logs:
+
+```sh
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/volatile.conf >/dev/null <<'EOF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=64M
+EOF
+```
+
+If `rsyslog` is installed, either leave it writing into the RAM-backed `/var/log`, or disable it if journald is enough:
+
+```sh
+sudo systemctl disable --now rsyslog 2>/dev/null || true
+```
+
+The demo scripts already write their own logs under `/tmp/springcard/log`, which remains writable because `/tmp` is a tmpfs.
+
+### 2. Disable swap
+
+Swap writes to the microSD, so disable it:
+
+```sh
+sudo dphys-swapfile swapoff
+sudo dphys-swapfile uninstall
+sudo systemctl disable dphys-swapfile 2>/dev/null || true
+```
+
+Check:
+
+```sh
+free -h
+```
+
+Swap should show `0`.
+
+### 3. Mount the microSD partitions read-only
+
+Edit `/etc/fstab` again and add `ro` to the mount options of the microSD partitions, at least `/` and `/boot/firmware`.
+
+Typical example before:
+
+```fstab
+PARTUUID=xxxxxxxx-02 /               ext4 defaults,noatime 0 1
+PARTUUID=xxxxxxxx-01 /boot/firmware  vfat defaults          0 2
+```
+
+After:
+
+```fstab
+PARTUUID=xxxxxxxx-02 /               ext4 ro,defaults,noatime 0 1
+PARTUUID=xxxxxxxx-01 /boot/firmware  vfat ro,defaults          0 2
+```
+
+Also force the root filesystem to start read-only from the kernel command line:
+
+```sh
 sudo vim /boot/firmware/cmdline.txt
 ```
 
-Find the line starting with `console=` and add `ro` at the end. For example:
+Keep everything on a single line and add `ro` near the end if it is not already present:
 
-```
+```text
 console=serial0,115200 console=tty1 root=PARTUUID=... ro
-```
-
-Then reboot:
-
-```
-sudo reboot
-```
-
-Verify the filesystem is read-only:
-
-```
-mount | grep "/ "
-```
-
-Look for `ro` in the mount options.
-
-### 2. Create a writable overlay with overlayfs
-
-Since some services need to write to `/run`, `/tmp`, and logs, use overlayfs to create a writable layer on top of the read-only root:
-
-```
-sudo apt install overlayroot
-```
-
-Configure overlayroot:
-
-```
-sudo vim /etc/overlayroot.conf
-```
-
-Set:
-
-```
-overlayroot="tmpfs"
 ```
 
 Reboot:
 
-```
+```sh
 sudo reboot
 ```
 
 Verify:
 
-```
-mount | grep overlay
-```
-
-### 3. Make logs persistent (optional)
-
-If you need to keep logs after reboot, use `systemd-journald` with a persistent directory:
-
-```
-sudo mkdir -p /var/log/journal
-sudo systemctl restart systemd-journald
+```sh
+findmnt -no TARGET,OPTIONS / /boot/firmware /tmp /var/log
 ```
 
-### 4. Temporary mount points for applications
+Expected result:
 
-Your scripts write to `/tmp` (which is writable via overlayfs). To store persistent data, use a separate writable partition:
+- `/` contains `ro`
+- `/boot/firmware` contains `ro`
+- `/tmp` and `/var/log` are `tmpfs` and writable
 
-```
-sudo mkdir -p /data
-sudo blkid
-```
+### 4. Maintenance mode
 
-Find your data partition (e.g., `/dev/mmcblk0p3`), then add to `/etc/fstab`:
+For maintenance, remount the microSD partitions read/write:
 
-```
-/dev/mmcblk0p3  /data  ext4  defaults  0  0
-```
-
-Reboot and verify:
-
-```
-mount | grep /data
-```
-
-### 5. Remount filesystem as writable temporarily (for maintenance)
-
-If you need to make changes, remount as writable:
-
-```
+```sh
 sudo mount -o remount,rw /
+sudo mount -o remount,rw /boot/firmware
 ```
 
-When done, remount as read-only:
+Make your changes, install packages, edit configuration, or update the project. Then flush writes and return to read-only mode:
 
-```
+```sh
+sync
+sudo mount -o remount,ro /boot/firmware
 sudo mount -o remount,ro /
 ```
 
-### 6. Disable swap on read-only filesystem
+If a process still has a writable file open on `/`, the remount may fail with `busy`. In that case, reboot after maintenance:
 
-Since swap can cause issues with read-only root, disable it:
-
-```
-sudo dphys-swapfile swapoff
-sudo dphys-swapfile uninstall
-sudo update-rc.d dphys-swapfile remove
-```
-
-Reboot and confirm:
-
-```
-free -h
-```
-
-Swap should show 0.
-
-### 7. Cron and persistent logs
-
-If the watchdog needs to log errors beyond `/tmp`, mount `/data` as writable and configure the service to write there:
-
-Edit your watchdog or service to log to `/data/watchdog.log` instead of `/tmp`.
-
-## Enhanced Robustness for Raspberry Pi 5
-
-Beyond read-only filesystems, implement these hardening measures for maximum reliability in production.
-
-### 1. Hardware Watchdog Timer
-
-A hardware watchdog is more reliable than software-based monitoring because it forces a reboot if the system becomes completely unresponsive:
-
-```
-sudo apt install watchdog
-```
-
-Configure it:
-
-```
-sudo vim /etc/watchdog.conf
-```
-
-Uncomment and set:
-
-```
-watchdog_device = /dev/watchdog
-watchdog-timeout = 10
-interval = 5
-```
-
-Enable and start:
-
-```
-sudo systemctl enable watchdog
-sudo systemctl start watchdog
-```
-
-Verify:
-
-```
-systemctl status watchdog
-```
-
-### 2. USB Autosuspend Disable
-
-Disable power management for USB devices to prevent card readers from going to sleep:
-
-```
-sudo vim /etc/modprobe.d/usb-autosuspend.conf
-```
-
-Add:
-
-```
-options usbcore autosuspend=-1
-```
-
-Reboot or reload:
-
-```
-sudo modprobe -r usbcore
-sudo modprobe usbcore
-```
-
-Verify:
-
-```
-cat /sys/module/usbcore/parameters/autosuspend
-```
-
-Should be `-1`.
-
-### 3. Network Connectivity Check Before Service Start
-
-Ensure Eth0 is actually up and has an IP address. Modify your systemd service:
-
-```
-sudo vim /etc/systemd/system/mobco-calypso-pki.service
-```
-
-Add an `ExecStartPre` check:
-
-```ini
-ExecStartPre=/usr/bin/test -n "$(ip addr show eth0 | grep 'inet ')"
-```
-
-Or create a custom pre-start script:
-
-```
-sudo vim /usr/local/bin/check-eth0.sh
-```
-
-Add:
-
-```bash
-#!/bin/bash
-for i in {1..30}; do
-  if ip addr show eth0 | grep -q 'inet '; then
-    exit 0
-  fi
-  sleep 1
-done
-exit 1
-```
-
-Make it executable:
-
-```
-sudo chmod +x /usr/local/bin/check-eth0.sh
-```
-
-Then reference it in your service:
-
-```ini
-ExecStartPre=/usr/local/bin/check-eth0.sh
-```
-
-### 4. Temperature Monitoring and Thermal Throttling
-
-Monitor CPU temperature and prevent thermal damage:
-
-```
-sudo apt install rpi-monitor
-```
-
-Or set thermal limits in `/boot/firmware/config.txt`:
-
-```
-temp_limit=85
-gpu_freq=750
-arm_freq=2400
-```
-
-Check current temperature:
-
-```
-vcgencmd measure_temp
-```
-
-Monitor throttling:
-
-```
-vcgencmd get_throttled
-```
-
-### 5. Power Supply Monitoring
-
-Detect voltage sags that cause random reboots. Check CPU frequency under load:
-
-```
-watch -n 1 vcgencmd measure_clock arm
-```
-
-If frequency drops unexpectedly, the power supply may be insufficient. Look for warnings in kernel logs:
-
-```
-dmesg | grep -i voltage
-dmesg | grep -i throttl
-```
-
-### 6. SD Card Health Monitoring
-
-Detect failing storage before catastrophic failure:
-
-```
-sudo apt install smartmontools
-sudo smartctl -a /dev/mmcblk0
-```
-
-Check for warnings:
-
-```
-sudo smartctl -H /dev/mmcblk0
-```
-
-Monitor periodically with a cron job:
-
-```
-sudo crontab -e
-```
-
-Add:
-
-```
-0 */6 * * * smartctl -H /dev/mmcblk0 >> /var/log/sd-health.log 2>&1
-```
-
-### 7. Service Resource Limits
-
-Prevent runaway processes from consuming all CPU or memory:
-
-```
-sudo vim /etc/systemd/system/mobco-calypso-pki.service
-```
-
-Add to the `[Service]` section:
-
-```ini
-MemoryLimit=512M
-CPUQuota=80%
-TasksMax=100
-```
-
-### 8. Systemd Service Hardening
-
-Improve security and stability by restricting service permissions:
-
-```ini
-[Service]
-ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-ReadWritePaths=/data /run/pcscd /tmp /var/log/journal
-PrivateTmp=yes
-RestrictNamespaces=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=yes
-```
-
-### 9. Remote Syslog for Persistent Logging
-
-Send logs to a remote server so they survive SD card failure:
-
+```sh
+sudo reboot
 ```
-sudo apt install rsyslog
-```
-
-Configure remote destination:
-
-```
-sudo vim /etc/rsyslog.d/99-remote.conf
-```
-
-Add:
-
-```
-*.* @@remote.syslog.server:514
-```
-
-Restart:
-
-```
-sudo systemctl restart rsyslog
-```
-
-### 10. Systemd Journal Persistence
-
-Keep recent logs even after reboots:
-
-```
-sudo mkdir -p /var/log/journal
-sudo chown root:systemd-journal /var/log/journal
-sudo chmod 2755 /var/log/journal
-sudo systemctl restart systemd-journald
-```
-
-Query logs persistently:
-
-```
-journalctl --since "2 days ago" -u mobco-calypso-pki.service
-```
 
-### 11. Network Fallback (WiFi as Secondary)
+After reboot, verify again:
 
-If WiFi is available, configure it as a fallback for diagnostics/monitoring:
-
-```
-sudo vim /etc/NetworkManager/conf.d/99-wifi-fallback.conf
-```
-
-Add:
-
-```ini
-[main]
-autoconnect-retries-default=3
-```
-
-### 12. Automatic Log Rotation
-
-Prevent `/data` from filling up with logs:
-
-```
-sudo apt install logrotate
-```
-
-Create a config:
-
-```
-sudo vim /etc/logrotate.d/mobco-calypso-pki
-```
-
-Add:
-
-```
-/data/watchdog.log {
-  daily
-  rotate 7
-  compress
-  delaycompress
-  missingok
-  notifempty
-  create 0644 root root
-}
-```
-
-Test:
-
-```
-sudo logrotate -d /etc/logrotate.d/mobco-calypso-pki
+```sh
+findmnt -no TARGET,OPTIONS / /boot/firmware /tmp /var/log
 ```

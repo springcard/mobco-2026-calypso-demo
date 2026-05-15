@@ -1,5 +1,5 @@
 #!/bin/bash
-PIDDIR=/home/springcard/pid
+PIDDIR=/tmp/springcard/pid
 for f in "$PIDDIR"/*.pid; do
     [ -f "$f" ] || continue
     PID=$(cat "$f")
