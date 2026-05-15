@@ -4,6 +4,7 @@ PIDDIR=home/springcard/mobco-2026-calypso-demo/pid
 mkdir -p "$PIDDIR"
 LOGDIR=home/springcard/mobco-2026-calypso-demo/log
 mkdir -p "$LOGDIR"
+systemctl stop pcscd
 gpioset -c gpiochip0 -t 1s,0 21=0
 sleep 3
 systemctl start pcscd
