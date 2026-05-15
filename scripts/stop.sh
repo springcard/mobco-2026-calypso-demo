@@ -1,5 +1,5 @@
 #!/bin/bash
-PIDDIR=home/springcard/mobco-2026-calypso-demo/pid
+PIDDIR=home/springcard/pid
 for f in "$PIDDIR"/*.pid; do
     [ -f "$f" ] || continue
     PID=$(cat "$f")
