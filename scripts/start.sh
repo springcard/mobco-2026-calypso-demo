@@ -1,8 +1,8 @@
 #!/bin/bash
 cd /home/springcard/mobco-2026-calypso-demo/scripts
-PIDDIR=home/springcard/pid
+PIDDIR=/home/springcard/pid
 mkdir -p "$PIDDIR"
-LOGDIR=home/springcard/log
+LOGDIR=/home/springcard/log
 mkdir -p "$LOGDIR"
 systemctl stop pcscd
 gpioset -c gpiochip0 -t 1s,0 21=0
