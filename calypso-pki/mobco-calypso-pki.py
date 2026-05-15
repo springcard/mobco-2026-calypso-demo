@@ -38,6 +38,8 @@ Usage:
         python calypso-pki-example.py -o open-gpio.sh
     Disable all output except fatal errors:
         python calypso-pki-example.py -q
+    Keep retrying forever when the PC/SC context, reader discovery, or processing fails fatally:
+        python calypso-pki-example.py -p
 
 """
 
@@ -45,9 +47,11 @@ import argparse
 import contextlib
 import io
 import sys
+import time
 
 
 _quiet = False
+PERSIST_RETRY_DELAY_SECONDS = 3
 
 
 def _print(*args, fatal=False, **kwargs):
@@ -113,6 +117,12 @@ def parse_command_line(argv=None):
         action="store_true",
         help="disable all output except fatal errors",
     )
+    parser.add_argument(
+        "-p",
+        "--persist",
+        action="store_true",
+        help="keep retrying every 3 seconds when PC/SC context, reader discovery, or processing fails fatally",
+    )
     return parser.parse_args(argv)
 
 
@@ -146,81 +156,129 @@ def list_pcsc_readers() -> int:
         return 1
 
 
+def _is_card_outcome_exception(calypso, e) -> bool:
+    return isinstance(e, (calypso.CardUnsupportedError, calypso.CardNotGenuineError))
+
+
+def _process_cards(args, hcontext, reader, access_control, pcsc_channel, pcsc_output, calypso) -> None:
+    while True:
+        pcsc_channel.wait_for_card_present(hcontext, reader)
+
+        callbacks = access_control.Configure(
+            args.authorized_cards_file,
+            accept_all_cards=args.accept_all_cards,
+            open_script=args.open_script,
+        )
+        stats = pcsc_channel.ApduStats()
+        transaction = None
+        card_communication_time = 0.0
+        crypto_time = 0.0
+
+        try:
+            with pcsc_channel.connect_channel(
+                hcontext,
+                reader,
+                stats=stats,
+                benchmark=args.quiet,
+            ) as channel:
+                output = pcsc_output.PcscOutput(
+                    hcontext,
+                    reader,
+                    before_control=channel.disconnect,
+                )
+                callbacks = access_control.Configure(
+                    args.authorized_cards_file,
+                    output=output,
+                    accept_all_cards=args.accept_all_cards,
+                    open_script=args.open_script,
+                )
+                transaction = calypso.read_calypso_pki_transaction(
+                    channel,
+                    callbacks=callbacks,
+                    benchmark=args.quiet,
+                )
+                card_communication_time = transaction.communication_time
+            _print()
+        except Exception as e:
+            _print("Exception:", e)
+            if args.persist and not _is_card_outcome_exception(calypso, e):
+                raise
+
+        try:
+            if transaction is not None:
+                crypto_time = calypso.verify_calypso_pki_transaction(
+                    transaction,
+                    callbacks=callbacks,
+                    benchmark=args.quiet,
+                )
+        except Exception as e:
+            _print("Exception:", e)
+            if args.persist and not _is_card_outcome_exception(calypso, e):
+                raise
+
+        _print_stats(stats, card_communication_time, crypto_time)
+        pcsc_channel.wait_for_card_removal(hcontext, reader)
+
+
+def _run_example_until_pcsc_failure(args, access_control, pcsc_channel, pcsc_output, calypso) -> None:
+    with pcsc_channel.pcsc_context(verbose=not args.quiet) as hcontext:
+        readers = pcsc_channel.list_readers(hcontext)
+        pcsc_channel.print_readers(readers)
+
+        reader = pcsc_channel.select_reader(readers, args.reader)
+        _print("Using reader: " + reader)
+
+        _process_cards(
+            args,
+            hcontext,
+            reader,
+            access_control,
+            pcsc_channel,
+            pcsc_output,
+            calypso,
+        )
+
+
+def _print_persist_retry(e) -> None:
+    _print("Exception:", e, fatal=True)
+    _print(
+        f"Retrying in {PERSIST_RETRY_DELAY_SECONDS} seconds...",
+        fatal=True,
+    )
+
+
 def run_example(args) -> int:
     try:
         import access_control
         import pcsc_channel
         import pcsc_output
+        from calypso_pki import calypso
 
-        with pcsc_channel.pcsc_context(verbose=not args.quiet) as hcontext:
-            readers = pcsc_channel.list_readers(hcontext)
-            pcsc_channel.print_readers(readers)
+        calypso.run_self_tests()
+        access_control.Configure(
+            args.authorized_cards_file,
+            accept_all_cards=args.accept_all_cards,
+            open_script=args.open_script,
+        )
 
-            reader = pcsc_channel.select_reader(readers, args.reader)
-            _print("Using reader: " + reader)
+        if not args.persist:
+            _run_example_until_pcsc_failure(args, access_control, pcsc_channel, pcsc_output, calypso)
+            return 0
 
-            from calypso_pki import calypso
-
-            calypso.run_self_tests()
-            access_control.Configure(
-                args.authorized_cards_file,
-                accept_all_cards=args.accept_all_cards,
-                open_script=args.open_script,
-            )
-
-            while True:
-                pcsc_channel.wait_for_card_present(hcontext, reader)
-
-                callbacks = access_control.Configure(
-                    args.authorized_cards_file,
-                    accept_all_cards=args.accept_all_cards,
-                    open_script=args.open_script,
+        while True:
+            try:
+                _run_example_until_pcsc_failure(
+                    args,
+                    access_control,
+                    pcsc_channel,
+                    pcsc_output,
+                    calypso,
                 )
-                stats = pcsc_channel.ApduStats()
-                transaction = None
-                card_communication_time = 0.0
-                crypto_time = 0.0
-
-                try:
-                    with pcsc_channel.connect_channel(
-                        hcontext,
-                        reader,
-                        stats=stats,
-                        benchmark=args.quiet,
-                    ) as channel:
-                        output = pcsc_output.PcscOutput(
-                            hcontext,
-                            reader,
-                            before_control=channel.disconnect,
-                        )
-                        callbacks = access_control.Configure(
-                            args.authorized_cards_file,
-                            output=output,
-                            accept_all_cards=args.accept_all_cards,
-                            open_script=args.open_script,
-                        )
-                        transaction = calypso.read_calypso_pki_transaction(
-                            channel,
-                            callbacks=callbacks,
-                            benchmark=args.quiet,
-                        )
-                        card_communication_time = transaction.communication_time
-                    _print()
-                except Exception as e:
-                    _print("Exception:", e)
-
-                try:
-                    if transaction is not None:
-                        crypto_time = calypso.verify_calypso_pki_transaction(
-                            transaction,
-                            callbacks=callbacks,
-                            benchmark=args.quiet,
-                        )
-                except Exception as e:
-                    _print("Exception:", e)
-
-                _print_stats(stats, card_communication_time, crypto_time)
-                pcsc_channel.wait_for_card_removal(hcontext, reader)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                _print_persist_retry(e)
+                time.sleep(PERSIST_RETRY_DELAY_SECONDS)
 
         return 0
     except KeyboardInterrupt:
