@@ -514,6 +514,8 @@ If you used root crontab, the script will run as root and behave like a login sh
 
 The goal is simple: keep the whole microSD card read-only during normal operation, without overlayfs and without persistent logs. Runtime files and logs stay writable only in RAM, so the system and the demo can still run normally.
 
+This is intentionally brutal. It lacks the finesse of a clean overlayfs or a service-by-service hardening profile, but for this demo appliance the end justifies the means: the system must tolerate sudden power loss, and there is no need to preserve local runtime state.
+
 ### 1. Prepare volatile writable directories
 
 Make sure `/tmp`, `/var/tmp`, and `/var/log` are RAM-backed. This avoids boot or service failures caused by software trying to write temporary files or logs while the microSD is read-only.
@@ -553,23 +555,48 @@ sudo systemctl disable --now rsyslog 2>/dev/null || true
 
 The demo scripts already write their own logs under `/tmp/springcard/log`, which remains writable because `/tmp` is a tmpfs.
 
-### 2. Disable swap
+### 2. Disable boot-time writers
 
-Swap writes to the microSD, so disable it:
+Disable provisioning and resize services that may try to modify the filesystem during boot. They are useful on a freshly imaged Raspberry Pi, but not on a finalized demo image:
 
 ```sh
-sudo dphys-swapfile swapoff
-sudo dphys-swapfile uninstall
+sudo touch /etc/cloud/cloud-init.disabled
+sudo systemctl disable cloud-init-local cloud-init cloud-config cloud-final 2>/dev/null || true
+
+sudo systemctl disable --now rpi-resize-var-swap-service 2>/dev/null || true
+sudo systemctl mask rpi-resize-var-swap-service 2>/dev/null || true
+```
+
+Disable user/session services that are not needed for the demo and can keep files open or write state:
+
+```sh
+systemctl --user disable rpi-connect.service 2>/dev/null || true
+sudo systemctl disable bluetooth 2>/dev/null || true
+```
+
+Disable file-backed swap if present. It is fine if `dphys-swapfile` is not installed:
+
+```sh
+sudo dphys-swapfile swapoff 2>/dev/null || true
+sudo dphys-swapfile uninstall 2>/dev/null || true
 sudo systemctl disable dphys-swapfile 2>/dev/null || true
 ```
 
-Check:
+Detach a stale `/var/swap` loop device if one exists:
+
+```sh
+losetup -j /var/swap
+sudo losetup -d /dev/loop0 2>/dev/null || true
+```
+
+Check swap status:
 
 ```sh
 free -h
+swapon --show
 ```
 
-Swap should show `0`.
+`/dev/zram0` is acceptable: it is compressed swap in RAM and does not write to the microSD. Avoid `/swapfile`, `/var/swap`, or any swap partition on the microSD.
 
 ### 3. Mount the microSD partitions read-only
 
@@ -647,3 +674,40 @@ After reboot, verify again:
 ```sh
 findmnt -no TARGET,OPTIONS / /boot/firmware /tmp /var/log
 ```
+
+### 5. If remounting `/` as read-only fails
+
+If this command fails with `mount point is busy`:
+
+```sh
+sudo mount -o remount,ro /
+```
+
+look for write-open files and stale loop devices:
+
+```sh
+sudo lsof -nP +f -- / | awk 'NR==1 || $4 ~ /[0-9]+[uw]/ || $4 ~ /DEL/ {print}'
+losetup -a
+sudo dmesg -T | tail -40
+```
+
+Known culprits on Raspberry Pi OS include:
+
+- `/var/swap` attached through `/dev/loop0`
+- `cloud-init-*` services
+- `rpi-resize-var-swap-service`
+- `rpi-connect.service`
+- `bluetooth.service`
+- a user `systemd --user` session keeping `/usr/lib/systemd/systemd-executor` open
+
+Useful recovery commands:
+
+```sh
+sudo losetup -d /dev/loop0 2>/dev/null || true
+systemctl --user exit
+sudo systemctl daemon-reexec
+sync
+sudo mount -o remount,ro /
+```
+
+If the live remount remains blocked by PID 1, do not spend too much time on it. Booting directly with `/` configured as `ro` is the real target state; use `journalctl -b` and `systemctl --failed` after that boot to diagnose any remaining service failure.
